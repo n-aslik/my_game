@@ -1,0 +1,35 @@
+{
+  "name": "Тайна заброшенного дома 2: Дом между эпохами",
+  "short_name": "Тайна дома 2",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#17151D",
+  "theme_color": "#17151D",
+  "description": "Продолжение мистического детектива: дом в 1927 году, аппарат времени и новые головоломки.",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "icons/Icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/Icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
