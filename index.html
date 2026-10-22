@@ -525,165 +525,160 @@
 </div>
 
 <script>
-/* ============ AUTH + STATS (localStorage) ============ */
+/* ============ AUTH + STATS (серверное хранение через /api) ============ */
 const Auth = (function(){
   "use strict";
-  const USERS_KEY = 'thief_users_v1', SESSION_KEY = 'thief_session_v1';
+  const TOKEN_KEY = 'thief_token_v2', GUEST_KEY = 'thief_guest_v2';
   const DIFFS = {easy:'Лёгкий', medium:'Средний', hard:'Сложный'};
   const $ = id => document.getElementById(id);
-  let current = null;   // username key, or null
+  let token = null;      // токен сессии
+  let cur = null;        // {name, stats}
   let guest = false;
   let mode = 'login';
+  let gameId = null;     // номер текущей партии (выдаёт сервер)
 
-  /* ---- storage ---- */
-  function loadUsers(){ try{ return JSON.parse(localStorage.getItem(USERS_KEY)) || {}; }catch(e){ return {}; } }
-  function saveUsers(u){ try{ localStorage.setItem(USERS_KEY, JSON.stringify(u)); }catch(e){} }
-  function setSession(v){ try{ v ? localStorage.setItem(SESSION_KEY, v) : localStorage.removeItem(SESSION_KEY); }catch(e){} }
-  function getSession(){ try{ return localStorage.getItem(SESSION_KEY); }catch(e){ return null; } }
-  const emptyStats = () => ({games:0, wins:0, losses:0, streak:0, bestStreak:0,
-    byDiff:{easy:{w:0,l:0}, medium:{w:0,l:0}, hard:{w:0,l:0}}, history:[]});
+  const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
+  const lsSet = (k,v) => { try{ v==null ? localStorage.removeItem(k) : localStorage.setItem(k,v); }catch(e){} };
 
-  /* ---- password hashing ---- */
-  function rndSalt(){ const a=new Uint8Array(12); (window.crypto||{}).getRandomValues ? crypto.getRandomValues(a) : a.forEach((_,i)=>a[i]=Math.random()*256); return Array.from(a,b=>b.toString(16).padStart(2,'0')).join(''); }
-  async function hashPass(pass, salt){
-    const data = salt + '::' + pass;
-    if(window.crypto && crypto.subtle){
-      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(data));
-      return Array.from(new Uint8Array(buf),b=>b.toString(16).padStart(2,'0')).join('');
-    }
-    let h1=0x811c9dc5, h2=5381;                       // fallback for non-secure contexts
-    for(let i=0;i<data.length;i++){ h1^=data.charCodeAt(i); h1=Math.imul(h1,16777619); h2=((h2<<5)+h2)^data.charCodeAt(i); }
-    return 'f' + (h1>>>0).toString(16) + (h2>>>0).toString(16);
+  /* ---- запросы к серверу ---- */
+  async function api(action, opts){
+    opts = opts || {};
+    const headers = {'Content-Type':'application/json'};
+    if(token) headers.Authorization = 'Bearer ' + token;
+    let r;
+    try{
+      r = await fetch('/api/' + action, {method: opts.method || 'GET', headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined});
+    }catch(e){ throw new Error('Нет связи с сервером.'); }
+    let data = {}; try{ data = await r.json(); }catch(e){}
+    if(!r.ok){ const err = new Error(data.error || 'Ошибка сервера.'); err.status = r.status; throw err; }
+    return data;
   }
 
-  /* ---- register / login ---- */
-  async function register(name, pass, pass2){
-    name = name.trim();
-    if(!/^[\p{L}\p{N}_-]{3,16}$/u.test(name)) throw 'Имя: 3–16 символов, буквы, цифры, «_» или «-».';
-    if(pass.length < 4) throw 'Пароль должен быть не короче 4 символов.';
-    if(pass !== pass2) throw 'Пароли не совпадают.';
-    const users = loadUsers(), k = name.toLowerCase();
-    if(users[k]) throw 'Игрок с таким именем уже есть.';
-    const salt = rndSalt();
-    users[k] = {name, salt, hash: await hashPass(pass, salt), created: Date.now(), stats: emptyStats()};
-    saveUsers(users);
-    return k;
-  }
-  async function login(name, pass){
-    const users = loadUsers(), k = name.trim().toLowerCase(), u = users[k];
-    if(!u || (await hashPass(pass, u.salt)) !== u.hash) throw 'Неверное имя или пароль.';
-    return k;
-  }
+  const pct = s => s.games ? Math.round(s.wins*100/s.games) : 0;
+  const show = (id, on, disp) => { $(id).style.display = on ? (disp||'block') : 'none'; };
+  const esc = t => String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-  /* ---- views ---- */
-  function show(el, on, disp){ $(el).style.display = on ? (disp||'block') : 'none'; }
-  function me(){ const u = loadUsers()[current]; if(u && !u.stats.byDiff) u.stats = emptyStats(); return u; }
-  function pct(s){ return s.games ? Math.round(s.wins*100/s.games) : 0; }
-
+  /* ---- экраны ---- */
   function renderUserBar(){
     const bar = $('userBar');
-    if(!current && !guest){ bar.classList.remove('show'); return; }
+    if(!cur && !guest){ bar.classList.remove('show'); return; }
     bar.classList.add('show');
     if(guest){
       $('userWho').innerHTML = '👤 <b>Гость</b>';
       $('userRec').textContent = 'статистика не сохраняется';
-      $('statsBtn').style.display = 'none';
+      $('statsBtn').textContent = '🏆 Рейтинг';
       $('logoutBtn').textContent = 'Войти / регистрация';
     } else {
-      const u = me(), s = u.stats;
-      $('userWho').innerHTML = '👤 <b></b>'; $('userWho').querySelector('b').textContent = u.name;
-      $('userRec').innerHTML = `<b class="w">${s.wins}</b> побед · <b class="l">${s.losses}</b> поражений`;
-      $('statsBtn').style.display = '';
+      $('userWho').innerHTML = '👤 <b></b>'; $('userWho').querySelector('b').textContent = cur.name;
+      $('userRec').innerHTML = `<b class="w">${cur.stats.wins}</b> побед · <b class="l">${cur.stats.losses}</b> поражений`;
+      $('statsBtn').textContent = '📊 Статистика';
       $('logoutBtn').textContent = 'Выйти';
     }
   }
   function renderStartRecord(){
     const el = $('startRecord');
-    if(guest || !current){ el.style.display='none'; return; }
-    const s = me().stats; el.style.display='flex';
+    if(!cur){ el.style.display = 'none'; return; }
+    const s = cur.stats; el.style.display = 'flex';
     el.innerHTML = `<div class="w"><b>${s.wins}</b><span>Побед</span></div>
       <div class="l"><b>${s.losses}</b><span>Поражений</span></div>
       <div><b>${pct(s)}%</b><span>Побед</span></div>
       <div><b>${s.streak}</b><span>Серия</span></div>`;
   }
   function enterApp(){
-    show('authPanel', false);
-    show('startPanel', true);
+    show('authPanel', false); show('startPanel', true);
     renderUserBar(); renderStartRecord();
   }
   function showAuthScreen(){
-    current = null; guest = false; setSession(null);
+    token = null; cur = null; guest = false; gameId = null;
+    lsSet(TOKEN_KEY, null); lsSet(GUEST_KEY, null);
     $('gameWrap').classList.remove('active');
     $('modalOverlay').classList.remove('show');
-    show('startPanel', false);
-    show('authPanel', true);
+    $('statsOverlay').classList.remove('show');
+    show('startPanel', false); show('authPanel', true);
     $('authPass').value = ''; $('authPass2').value = ''; $('authError').textContent = '';
     renderUserBar();
   }
+  async function logout(){
+    if(token){ try{ await api('logout', {method:'POST'}); }catch(e){} }
+    showAuthScreen();
+  }
 
-  /* ---- stats modal ---- */
+  /* ---- окно статистики / рейтинга ---- */
   let statsTab = 'me';
-  function fmtDate(t){ const d=new Date(t); return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}); }
-  function esc(t){ return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  const fmtDate = t => { const d=new Date(t); return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}); };
+
+  function renderMine(){
+    const s = cur.stats;
+    $('statsTitle').textContent = cur.name;
+    let h = `<div class="kpis">
+      <div class="kpi"><b>${s.games}</b><span>Игр</span></div>
+      <div class="kpi w"><b>${s.wins}</b><span>Побед</span></div>
+      <div class="kpi l"><b>${s.losses}</b><span>Поражений</span></div>
+      <div class="kpi p"><b>${pct(s)}%</b><span>Побед</span></div></div>
+      <div class="bar"><i style="width:${s.games?pct(s):0}%"></i></div>
+      <table class="tbl"><tr><th>Сложность</th><th>Победы</th><th>Поражения</th><th>%</th></tr>`;
+    for(const d of Object.keys(DIFFS)){
+      const x = s.byDiff[d], t = x.w + x.l;
+      h += `<tr><td>${DIFFS[d]}</td><td class="w">${x.w}</td><td class="l">${x.l}</td><td>${t?Math.round(x.w*100/t):0}%</td></tr>`;
+    }
+    h += `</table><div class="stat-row"><span>Текущая серия побед</span><b>${s.streak}</b></div>
+      <div class="stat-row"><span>Лучшая серия побед</span><b>${s.bestStreak}</b></div>
+      <div class="sec-title">Последние игры</div>`;
+    if(!s.history.length) h += '<div class="muted">Пока нет сыгранных игр.</div>';
+    else {
+      h += '<table class="tbl"><tr><th>Дата</th><th>Сложность</th><th>Ходов</th><th>Итог</th></tr>';
+      s.history.slice(0,10).forEach(g=>{
+        h += `<tr><td>${fmtDate(g.t)}</td><td>${DIFFS[g.diff]||''}</td><td>${g.moves}</td><td class="${g.win?'w':'l'}">${g.win?'Победа':'Поражение'}</td></tr>`;
+      });
+      h += '</table>';
+    }
+    $('statsBody').innerHTML = h;
+  }
+  async function renderTop(){
+    $('statsTitle').textContent = 'Рейтинг игроков';
+    $('statsBody').innerHTML = '<div class="muted">Загрузка…</div>';
+    try{
+      const {players} = await api('leaderboard');
+      if(statsTab !== 'top') return;
+      if(!players.length){ $('statsBody').innerHTML = '<div class="muted">Пока нет игроков.</div>'; return; }
+      let h = '<table class="tbl"><tr><th>#</th><th>Игрок</th><th>Победы</th><th>Поражения</th><th>%</th></tr>';
+      players.forEach((p,i)=>{
+        h += `<tr class="${p.me?'me':''}"><td>${i+1}</td><td>${esc(p.name)}</td><td>${p.wins}</td><td>${p.losses}</td><td>${p.pct}%</td></tr>`;
+      });
+      $('statsBody').innerHTML = h + '</table>';
+    }catch(e){ $('statsBody').innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+  }
   function renderStats(){
     document.querySelectorAll('#statsOverlay .auth-tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===statsTab));
-    $('statsReset').style.display = statsTab==='me' ? '' : 'none';
-    const body = $('statsBody');
-    if(statsTab === 'me'){
-      const u = me(), s = u.stats;
-      $('statsTitle').textContent = u.name;
-      let h = `<div class="kpis">
-        <div class="kpi"><b>${s.games}</b><span>Игр</span></div>
-        <div class="kpi w"><b>${s.wins}</b><span>Побед</span></div>
-        <div class="kpi l"><b>${s.losses}</b><span>Поражений</span></div>
-        <div class="kpi p"><b>${pct(s)}%</b><span>Побед</span></div></div>
-        <div class="bar"><i style="width:${s.games?pct(s):0}%"></i></div>
-        <table class="tbl"><tr><th>Сложность</th><th>Победы</th><th>Поражения</th><th>%</th></tr>`;
-      for(const d of Object.keys(DIFFS)){
-        const x = s.byDiff[d], t = x.w + x.l;
-        h += `<tr><td>${DIFFS[d]}</td><td class="w">${x.w}</td><td class="l">${x.l}</td><td>${t?Math.round(x.w*100/t):0}%</td></tr>`;
-      }
-      h += `</table><div class="stat-row"><span>Текущая серия побед</span><b>${s.streak}</b></div>
-        <div class="stat-row"><span>Лучшая серия побед</span><b>${s.bestStreak}</b></div>
-        <div class="sec-title">Последние игры</div>`;
-      if(!s.history.length) h += '<div class="muted">Пока нет сыгранных игр.</div>';
-      else {
-        h += '<table class="tbl"><tr><th>Дата</th><th>Сложность</th><th>Ходов</th><th>Итог</th></tr>';
-        s.history.slice(0,10).forEach(g=>{
-          h += `<tr><td>${fmtDate(g.t)}</td><td>${DIFFS[g.diff]||''}</td><td>${g.moves}</td><td class="${g.win?'w':'l'}">${g.win?'Победа':'Поражение'}</td></tr>`;
-        });
-        h += '</table>';
-      }
-      body.innerHTML = h;
-    } else {
-      $('statsTitle').textContent = 'Рейтинг игроков';
-      const users = Object.entries(loadUsers()).map(([k,u])=>({k, name:u.name, s:u.stats||emptyStats()}))
-        .sort((a,b)=> b.s.wins-a.s.wins || pct(b.s)-pct(a.s) || a.s.losses-b.s.losses);
-      let h = '<table class="tbl"><tr><th>#</th><th>Игрок</th><th>Победы</th><th>Поражения</th><th>%</th></tr>';
-      users.forEach((u,i)=>{
-        h += `<tr class="${u.k===current?'me':''}"><td>${i+1}</td><td>${esc(u.name)}</td><td>${u.s.wins}</td><td>${u.s.losses}</td><td>${pct(u.s)}%</td></tr>`;
-      });
-      body.innerHTML = h + '</table>';
-    }
+    $('statsReset').style.display = (statsTab==='me' && cur) ? '' : 'none';
+    if(statsTab==='me' && cur) renderMine(); else { statsTab = 'top'; renderTop(); }
+  }
+  function openStats(){
+    statsTab = cur ? 'me' : 'top';
+    document.querySelector('#statsOverlay .auth-tab[data-tab="me"]').style.display = cur ? '' : 'none';
+    renderStats();
+    $('statsOverlay').classList.add('show');
   }
 
-  /* ---- public: record a finished game ---- */
-  function recordGame(win, diff, moves){
-    if(guest || !current) return null;
-    const users = loadUsers(), u = users[current]; if(!u) return null;
-    if(!u.stats || !u.stats.byDiff) u.stats = emptyStats();
-    const s = u.stats;
-    s.games++;
-    if(win){ s.wins++; s.streak++; s.bestStreak = Math.max(s.bestStreak, s.streak); s.byDiff[diff].w++; }
-    else   { s.losses++; s.streak = 0; s.byDiff[diff].l++; }
-    s.history.unshift({t:Date.now(), win, diff, moves});
-    s.history = s.history.slice(0,30);
-    saveUsers(users);
-    renderUserBar(); renderStartRecord();
-    return s;
+  /* ---- партии ---- */
+  async function startGame(difficulty){
+    gameId = null;
+    if(!cur) return;
+    try{ gameId = (await api('start', {method:'POST', body:{difficulty}})).gameId; }catch(e){ gameId = null; }
+  }
+  async function recordGame(win, moves){
+    if(!cur || !gameId) return null;
+    const id = gameId; gameId = null;
+    try{
+      const {stats} = await api('finish', {method:'POST', body:{gameId:id, win, moves}});
+      cur.stats = stats;
+      renderUserBar(); renderStartRecord();
+      return stats;
+    }catch(e){ return null; }
   }
 
-  /* ---- wiring ---- */
+  /* ---- форма входа ---- */
   function setMode(m){
     mode = m;
     document.querySelectorAll('#authPanel .auth-tab').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
@@ -695,36 +690,48 @@ const Auth = (function(){
   async function submit(){
     const btn = $('authSubmit'); btn.disabled = true; $('authError').textContent = '';
     try{
-      const name = $('authName').value, pass = $('authPass').value;
-      current = mode==='register' ? await register(name, pass, $('authPass2').value) : await login(name, pass);
-      guest = false; setSession(current);
+      const name = $('authName').value.trim(), pass = $('authPass').value;
+      if(mode==='register'){
+        if(!/^[\p{L}\p{N}_-]{3,16}$/u.test(name)) throw new Error('Имя: 3–16 символов, буквы, цифры, «_» или «-».');
+        if(pass.length < 4) throw new Error('Пароль должен быть не короче 4 символов.');
+        if(pass !== $('authPass2').value) throw new Error('Пароли не совпадают.');
+      }
+      const d = await api(mode==='register' ? 'register' : 'login', {method:'POST', body:{name, password:pass}});
+      token = d.token; cur = {name:d.name, stats:d.stats}; guest = false;
+      lsSet(TOKEN_KEY, token); lsSet(GUEST_KEY, null);
       $('authPass').value = ''; $('authPass2').value = '';
       enterApp();
-    }catch(e){ $('authError').textContent = (typeof e==='string') ? e : 'Ошибка. Попробуй ещё раз.'; }
+    }catch(e){ $('authError').textContent = e.message || 'Ошибка. Попробуй ещё раз.'; }
     btn.disabled = false;
   }
-  function init(){
+
+  async function init(){
     document.querySelectorAll('#authPanel .auth-tab').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
     $('authSubmit').addEventListener('click', submit);
     ['authName','authPass','authPass2'].forEach(id=>$(id).addEventListener('keydown',e=>{ if(e.key==='Enter') submit(); }));
-    $('guestBtn').addEventListener('click',()=>{ guest = true; current = null; setSession('__guest__'); enterApp(); });
-    $('logoutBtn').addEventListener('click', showAuthScreen);
-    $('statsBtn').addEventListener('click',()=>{ statsTab='me'; renderStats(); $('statsOverlay').classList.add('show'); });
+    $('guestBtn').addEventListener('click',()=>{ guest = true; cur = null; token = null; lsSet(TOKEN_KEY,null); lsSet(GUEST_KEY,'1'); enterApp(); });
+    $('logoutBtn').addEventListener('click', logout);
+    $('statsBtn').addEventListener('click', openStats);
     $('statsClose').addEventListener('click',()=>$('statsOverlay').classList.remove('show'));
     $('statsOverlay').addEventListener('click',e=>{ if(e.target===$('statsOverlay')) $('statsOverlay').classList.remove('show'); });
     document.querySelectorAll('#statsOverlay .auth-tab').forEach(b=>b.addEventListener('click',()=>{ statsTab=b.dataset.tab; renderStats(); }));
-    $('statsReset').addEventListener('click',()=>{
-      if(!current || !confirm('Сбросить всю статистику этого игрока?')) return;
-      const users = loadUsers(); users[current].stats = emptyStats(); saveUsers(users);
-      renderStats(); renderUserBar(); renderStartRecord();
+    $('statsReset').addEventListener('click', async ()=>{
+      if(!cur || !confirm('Сбросить всю статистику этого игрока?')) return;
+      try{
+        cur.stats = (await api('reset', {method:'POST'})).stats;
+        renderStats(); renderUserBar(); renderStartRecord();
+      }catch(e){ alert(e.message); }
     });
-    // restore session
-    const ses = getSession();
-    if(ses === '__guest__'){ guest = true; enterApp(); }
-    else if(ses && loadUsers()[ses]){ current = ses; enterApp(); }
+    // восстановление сессии
+    const saved = lsGet(TOKEN_KEY);
+    if(saved){
+      token = saved;
+      try{ const d = await api('me'); cur = {name:d.name, stats:d.stats}; enterApp(); }
+      catch(e){ if(e.status===401){ token = null; lsSet(TOKEN_KEY,null); } else { $('authError').textContent = e.message; token = null; } }
+    } else if(lsGet(GUEST_KEY)){ guest = true; enterApp(); }
   }
   document.addEventListener('DOMContentLoaded', init);
-  return {recordGame, isGuest:()=>guest};
+  return {startGame, recordGame, isGuest:()=>guest};
 })();
 </script>
 <script>
@@ -1088,15 +1095,18 @@ const Auth = (function(){
     if(state.gameOver) return;
     state.gameOver = true;
     // win = true — победила полиция (игрок), false — победил вор
-    const st = Auth.recordGame(win, state.difficulty, state.moveCount);
-    if(st) text += `\n\nТвой счёт: ${st.wins} побед / ${st.losses} поражений` + (win && st.streak>1 ? ` · серия ${st.streak} 🔥` : '');
-    else if(Auth.isGuest()) text += '\n\n(Гость: результат не сохраняется)';
+    const moves = state.moveCount;
     rollBtn.disabled = true;
     clearReachable();
     $('modalEmoji').textContent = emoji;
     $('modalTitle').textContent = title;
     $('modalText').textContent = text;
     $('modalOverlay').classList.add('show');
+    if(Auth.isGuest()){ $('modalText').textContent += '\n\n(Гость: результат не сохраняется)'; }
+    else Auth.recordGame(win, moves).then(st=>{
+      if(!st) return;
+      $('modalText').textContent = text + `\n\nТвой счёт: ${st.wins} побед / ${st.losses} поражений` + (win && st.streak>1 ? ` · серия ${st.streak} 🔥` : '');
+    });
   }
 
   async function policeRoll(){
@@ -1250,6 +1260,7 @@ const Auth = (function(){
 
   function startGame(){
     state = freshState(chosenDiff);
+    Auth.startGame(state.difficulty);
     buildStaticMap();
     gridEl.appendChild(policeCar);
     gridEl.appendChild(thiefCar);

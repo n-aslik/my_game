@@ -1,0 +1,12 @@
+{
+  "name": "thief-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Погоня за вором — игра с общим рейтингом",
+  "dependencies": {
+    "@upstash/redis": "^1.34.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
