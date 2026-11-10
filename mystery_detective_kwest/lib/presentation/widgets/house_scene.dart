@@ -225,7 +225,7 @@ class _HousePainter extends CustomPainter {
     // Дверь.
     final door = Rect.fromLTWH(left + hw * 0.43, base - h * 0.10, hw * 0.14, h * 0.10);
     canvas.drawRRect(
-      RRect.fromRectAndCorner(
+      RRect.fromRectAndCorners(
         door,
         topLeft: Radius.circular(hw * 0.07),
         topRight: Radius.circular(hw * 0.07),
