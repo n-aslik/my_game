@@ -131,7 +131,7 @@ class _ParticlePainter extends CustomPainter {
           final y = (p.y - t * n) % 1.0;
           final x = p.x + math.sin(t * tau * 3 + p.phase) * 0.03;
           final fade = math.sin(y * math.pi);
-          paint.color = color.withValues(alpha: (0.55 * fade).clamp(0.0, 1.0));
+          paint.color = color.withValues(alpha: (0.55 * fade).clamp(0.0, 1.0).toDouble());
           canvas.drawCircle(Offset(x * w, y * h), 0.8 + p.size * 1.8, paint);
           break;
         }

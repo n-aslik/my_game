@@ -59,6 +59,7 @@ class _GameScreenState extends State<GameScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        behavior: SnackBarBehavior.floating,
         margin: EdgeInsets.fromLTRB(16, 0, 16, onGameScreen ? 190 : 24),
         content: Row(
           children: [
