@@ -5,6 +5,7 @@ import 'services/music_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  AppTheme.palette = AppPalette.mystic;
   // Музыка запускается сразу при старте приложения и звучит фоном
   // на всех экранах — от главного меню до финальных титров.
   MusicService.instance.init();
