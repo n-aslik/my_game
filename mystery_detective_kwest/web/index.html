@@ -15,9 +15,31 @@
   <link rel="icon" type="image/png" href="favicon.png"/>
   <link rel="manifest" href="manifest.json">
   <title>Тайна заброшенного дома</title>
-  <style>html,body{margin:0;background:#07060C;height:100%}</style>
+  <style>
+    html,body{margin:0;background:#07060C;height:100%;overflow:hidden}
+    #wrap{display:flex;flex-direction:column;height:100%}
+    /* Игра занимает всё свободное место */
+    #game{flex:1;min-height:0;position:relative}
+    /* Рекламный блок под игрой. Пока в нём пусто, он не виден. */
+    #ad-slot{flex:none;display:flex;justify-content:center;align-items:center;
+      max-height:100px;overflow:hidden;background:#000}
+    #ad-slot:empty{display:none}
+    #links{flex:none;text-align:center;font:12px/22px sans-serif;background:#000}
+    #links a{color:#8a8478;text-decoration:none;margin:0 10px}
+    /* На низких экранах (телефон боком) рекламу прячем, чтобы не мешала играть */
+    @media (max-height:500px){#ad-slot{display:none}}
+  </style>
 </head>
 <body>
+  <div id="wrap">
+    <div id="game"></div>
+    <!-- РЕКЛАМА: вставьте сюда код баннера от рекламной сети (между тегами div). -->
+    <div id="ad-slot"></div>
+    <div id="links">
+      <a href="about.html" target="_blank" rel="noopener">Об игре</a>
+      <a href="privacy.html" target="_blank" rel="noopener">Конфиденциальность</a>
+    </div>
+  </div>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
