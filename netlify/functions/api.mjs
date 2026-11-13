@@ -1,9 +1,10 @@
-/* Единая serverless-функция Vercel: /api/register, /api/login, /api/me, /api/logout,
+/* Netlify Function (v2): /api/register, /api/login, /api/me, /api/logout,
    /api/start, /api/finish, /api/leaderboard, /api/reset
-   База: Upstash Redis (переменные окружения подставляет интеграция Vercel). */
-const { Redis } = require('@upstash/redis');
-const crypto = require('crypto');
-const { promisify } = require('util');
+   База: Upstash Redis (переменные окружения UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN). */
+import { Redis } from '@upstash/redis';
+import crypto from 'node:crypto';
+import { promisify } from 'node:util';
+
 const scrypt = promisify(crypto.scrypt);
 
 const URL_ = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
@@ -21,7 +22,10 @@ const emptyStats = () => ({
   history: []
 });
 
-const send = (res, code, data) => res.status(code).json(data);
+const send = (code, data) => new Response(JSON.stringify(data), {
+  status: code,
+  headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+});
 const fail = (code, msg) => { const e = new Error(msg); e.status = code; return e; };
 
 async function hashPass(pass, salt) {
@@ -33,7 +37,7 @@ async function newSession(key) {
   return token;
 }
 function bearer(req) {
-  const h = req.headers.authorization || '';
+  const h = req.headers.get('authorization') || '';
   return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
 }
 async function sessionUser(req) {
@@ -46,8 +50,10 @@ async function requireUser(req) {
   if (!key) throw fail(401, 'Нужно войти в аккаунт.');
   return key;
 }
-async function rateLimit(req, action, limit) {
-  const ip = String(req.headers['x-forwarded-for'] || 'unknown').split(',')[0].trim();
+async function rateLimit(req, context, action, limit) {
+  const ip = context?.ip
+    || req.headers.get('x-nf-client-connection-ip')
+    || String(req.headers.get('x-forwarded-for') || 'unknown').split(',')[0].trim();
   const k = `rl:${action}:${ip}`;
   const n = await redis.incr(k);
   if (n === 1) await redis.expire(k, 60);
@@ -56,18 +62,20 @@ async function rateLimit(req, action, limit) {
 const mustBe = (req, method) => { if (req.method !== method) throw fail(405, 'Метод не поддерживается.'); };
 const pct = s => s.games ? Math.round(s.wins * 100 / s.games) : 0;
 
-module.exports = async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
+export default async (req, context) => {
   try {
     if (!redis) throw fail(500, 'База данных не подключена (нет переменных окружения Upstash).');
-    const action = req.query.action;
-    const body = (req.body && typeof req.body === 'object') ? req.body : {};
+    const action = new URL(req.url).pathname.replace(/\/+$/, '').split('/').pop();
+    let body = {};
+    if (req.method === 'POST') {
+      try { const j = await req.json(); if (j && typeof j === 'object') body = j; } catch { /* пустое тело */ }
+    }
 
     switch (action) {
 
       case 'register': {
         mustBe(req, 'POST');
-        await rateLimit(req, 'auth', 15);
+        await rateLimit(req, context, 'auth', 15);
         const name = String(body.name || '').trim();
         const pass = String(body.password || '');
         if (!NAME_RE.test(name)) throw fail(400, 'Имя: 3–16 символов, буквы, цифры, «_» или «-».');
@@ -79,12 +87,12 @@ module.exports = async (req, res) => {
         const stats = emptyStats();
         await redis.set('stats:' + key, stats);
         await redis.sadd('users', key);
-        return send(res, 200, { token: await newSession(key), name, stats });
+        return send(200, { token: await newSession(key), name, stats });
       }
 
       case 'login': {
         mustBe(req, 'POST');
-        await rateLimit(req, 'auth', 15);
+        await rateLimit(req, context, 'auth', 15);
         const key = String(body.name || '').trim().toLowerCase();
         const pass = String(body.password || '');
         const u = key && await redis.get('user:' + key);
@@ -93,7 +101,7 @@ module.exports = async (req, res) => {
         const b = Buffer.from(u.hash, 'hex');
         if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw fail(401, 'Неверное имя или пароль.');
         const stats = (await redis.get('stats:' + key)) || emptyStats();
-        return send(res, 200, { token: await newSession(key), name: u.name, stats });
+        return send(200, { token: await newSession(key), name: u.name, stats });
       }
 
       case 'me': {
@@ -101,14 +109,14 @@ module.exports = async (req, res) => {
         const key = await requireUser(req);
         const u = await redis.get('user:' + key);
         if (!u) throw fail(401, 'Аккаунт не найден.');
-        return send(res, 200, { name: u.name, stats: (await redis.get('stats:' + key)) || emptyStats() });
+        return send(200, { name: u.name, stats: (await redis.get('stats:' + key)) || emptyStats() });
       }
 
       case 'logout': {
         mustBe(req, 'POST');
         const t = bearer(req);
         if (t && /^[0-9a-f]{64}$/.test(t)) await redis.del('session:' + t);
-        return send(res, 200, { ok: true });
+        return send(200, { ok: true });
       }
 
       case 'start': {
@@ -117,7 +125,7 @@ module.exports = async (req, res) => {
         if (!DIFFS.includes(body.difficulty)) throw fail(400, 'Неверная сложность.');
         const gameId = crypto.randomBytes(16).toString('hex');
         await redis.set('game:' + gameId, { u: key, d: body.difficulty, t: Date.now() }, { ex: 3600 });
-        return send(res, 200, { gameId });
+        return send(200, { gameId });
       }
 
       case 'finish': {
@@ -137,14 +145,14 @@ module.exports = async (req, res) => {
         s.history.unshift({ t: Date.now(), win, diff: g.d, moves });
         s.history = s.history.slice(0, 30);
         await redis.set('stats:' + key, s);
-        return send(res, 200, { stats: s });
+        return send(200, { stats: s });
       }
 
       case 'leaderboard': {
         mustBe(req, 'GET');
         const me = await sessionUser(req);
         const keys = ((await redis.smembers('users')) || []).slice(0, 2000);
-        if (!keys.length) return send(res, 200, { players: [] });
+        if (!keys.length) return send(200, { players: [] });
         const [stats, users] = await Promise.all([
           redis.mget(...keys.map(k => 'stats:' + k)),
           redis.mget(...keys.map(k => 'user:' + k))
@@ -153,7 +161,7 @@ module.exports = async (req, res) => {
           const s = stats[i] || emptyStats();
           return { name: users[i] ? users[i].name : k, wins: s.wins, losses: s.losses, games: s.games, pct: pct(s), me: k === me };
         }).sort((a, b) => b.wins - a.wins || b.pct - a.pct || a.losses - b.losses).slice(0, 50);
-        return send(res, 200, { players });
+        return send(200, { players });
       }
 
       case 'reset': {
@@ -161,7 +169,7 @@ module.exports = async (req, res) => {
         const key = await requireUser(req);
         const stats = emptyStats();
         await redis.set('stats:' + key, stats);
-        return send(res, 200, { stats });
+        return send(200, { stats });
       }
 
       default:
@@ -169,6 +177,9 @@ module.exports = async (req, res) => {
     }
   } catch (e) {
     if (!e.status) console.error(e);
-    return send(res, e.status || 500, { error: e.status ? e.message : 'Ошибка сервера.' });
+    return send(e.status || 500, { error: e.status ? e.message : 'Ошибка сервера.' });
   }
 };
+
+// Функция отвечает на /api/* — отдельные редиректы не нужны
+export const config = { path: '/api/*' };
